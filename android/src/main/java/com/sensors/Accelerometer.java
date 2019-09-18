@@ -22,9 +22,11 @@ public class Accelerometer extends ReactContextBaseJavaModule implements SensorE
   private final ReactApplicationContext reactContext;
   private final SensorManager sensorManager;
   private final Sensor sensor;
-  private double lastReading = (double) System.currentTimeMillis();
+  private long lastReading;
+  private long nextGenerationTime;
   private int interval;
   private Arguments arguments;
+  private AverageAcceleration avgAcc;
 
   public Accelerometer(ReactApplicationContext reactContext) {
     super(reactContext);
@@ -53,7 +55,10 @@ public class Accelerometer extends ReactContextBaseJavaModule implements SensorE
   @ReactMethod
   public void startUpdates() {
     // Milisecond to Mikrosecond conversion
-    sensorManager.registerListener(this, sensor, this.interval * 1000);
+    this.lastReading = (System.currentTimeMillis() / this.interval) * this.interval;
+    this.nextGenerationTime = this.lastReading + this.interval;
+    this.avgAcc = new AverageAcceleration();
+    sensorManager.registerListener(this, sensor, sensorManager.SENSOR_DELAY_GAME);
   }
 
   @ReactMethod
@@ -76,26 +81,54 @@ public class Accelerometer extends ReactContextBaseJavaModule implements SensorE
     }
   }
 
-    @Override
-    public void onSensorChanged(SensorEvent sensorEvent) {
-      double tempMs = (double) System.currentTimeMillis();
-      if (tempMs - lastReading >= interval){
-        lastReading = tempMs;
-
-        Sensor mySensor = sensorEvent.sensor;
-        WritableMap map = arguments.createMap();
-
-        if (mySensor.getType() == Sensor.TYPE_ACCELEROMETER) {
-          map.putDouble("x", sensorEvent.values[0]);
-          map.putDouble("y", sensorEvent.values[1]);
-          map.putDouble("z", sensorEvent.values[2]);
-          map.putDouble("timestamp", tempMs);
-          sendEvent("Accelerometer", map);
-        }
-      }
+  @Override
+  public void onSensorChanged(SensorEvent sensorEvent) {
+    Sensor mySensor = sensorEvent.sensor;
+    if (mySensor.getType() != Sensor.TYPE_ACCELEROMETER) {
+      return;
     }
 
-    @Override
-    public void onAccuracyChanged(Sensor sensor, int accuracy) {
+    long curTime =  System.currentTimeMillis();
+    if (curTime > this.nextGenerationTime) {
+      this.avgAcc.add(sensorEvent.values[0], sensorEvent.values[1], sensorEvent.values[2], this.nextGenerationTime - this.lastReading);
+      sendEvent("Accelerometer", this.avgAcc.calculate(this.nextGenerationTime, interval));    
+      this.avgAcc = new AverageAcceleration();
+      this.lastReading = this.nextGenerationTime;
+      this.nextGenerationTime += this.interval;
     }
+
+    this.avgAcc.add(sensorEvent.values[0], sensorEvent.values[1], sensorEvent.values[2], curTime - this.lastReading);
+    this.lastReading = curTime;
+  }
+
+  @Override
+  public void onAccuracyChanged(Sensor sensor, int accuracy) {
+  }
+
+  public class AverageAcceleration {
+    private double x;
+    private double y;
+    private double z;
+    
+    public AverageAcceleration() {
+      this.x = 0;
+      this.y = 0;
+      this.z = 0;
+    }
+
+    public void add(double x, double y, double z, long weight) {
+      this.x += x * weight;
+      this.y += y * weight;
+      this.z += z * weight;
+    }
+
+    public WritableMap calculate(long timestamp, int interval) {
+      WritableMap map = arguments.createMap();
+      map.putDouble("x", this.x / interval);
+      map.putDouble("y", this.y / interval);
+      map.putDouble("z", this.z / interval);
+      map.putDouble("timestamp", (double)timestamp);
+      return map;
+    }
+  }
 }
